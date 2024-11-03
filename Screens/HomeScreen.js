@@ -9,7 +9,7 @@ export default function HomeScreen({ navigation }) {
     <View style={styles.container}>
       {/* Top Navigation */}
       <View style={styles.topNav}>
-        <Text style={styles.appName}>Apps Name</Text>
+        <Text style={styles.appName}>StudentAi</Text>
         <TouchableOpacity style={styles.notificationIcon}>
           <MaterialIcons name="notifications" size={28} color="#333" />
         </TouchableOpacity>
