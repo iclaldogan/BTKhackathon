@@ -1,0 +1,285 @@
+import os
+import time
+import google.generativeai as genai
+
+genai.configure(api_key=os.environ["GEMINI_API_KEY"])
+
+def upload_to_gemini(path, mime_type=None):
+  """Uploads the given file to Gemini.
+
+  See https://ai.google.dev/gemini-api/docs/prompting_with_media
+  """
+  file = genai.upload_file(path, mime_type=mime_type)
+  print(f"Uploaded file '{file.display_name}' as: {file.uri}")
+  return file
+
+def wait_for_files_active(files):
+  """Waits for the given files to be active.
+
+  Some files uploaded to the Gemini API need to be processed before they can be
+  used as prompt inputs. The status can be seen by querying the file's "state"
+  field.
+
+  This implementation uses a simple blocking polling loop. Production code
+  should probably employ a more sophisticated approach.
+  """
+  print("Waiting for file processing...")
+  for name in (file.name for file in files):
+    file = genai.get_file(name)
+    while file.state.name == "PROCESSING":
+      print(".", end="", flush=True)
+      time.sleep(10)
+      file = genai.get_file(name)
+    if file.state.name != "ACTIVE":
+      raise Exception(f"File {file.name} failed to process")
+  print("...all files ready")
+  print()
+
+# Create the model
+generation_config = {
+  "temperature": 1,
+  "top_p": 0.75,
+  "top_k": 40,
+  "max_output_tokens": 8192,
+  "response_mime_type": "text/plain",
+}
+
+model = genai.GenerativeModel(
+  model_name="gemini-1.5-pro",
+  generation_config=generation_config,
+)
+
+# TODO Make these files available on the local file system
+# You may need to update the file paths
+files = [
+  upload_to_gemini("Isci-Havuz-Problemleri.pdf", mime_type="application/pdf"),
+  upload_to_gemini("Carpanlara-Ayirma.pdf", mime_type="application/pdf"),
+  upload_to_gemini("2.Dereceden-Denklemler.pdf", mime_type="application/pdf"),
+  upload_to_gemini("28150340_matematik_temel_duzey.pdf", mime_type="application/pdf"),
+  upload_to_gemini("matematik.pdf", mime_type="application/pdf"),
+  upload_to_gemini("Mutlak-Deger.pdf", mime_type="application/pdf"),
+  upload_to_gemini("40f1d62f-aec6-4c41-85cf-28ce133cbbc9.jpg", mime_type="image/jpeg"),
+]
+
+# Some files have a processing delay. Wait for them to be ready.
+wait_for_files_active(files)
+
+chat_session = model.start_chat(
+  history=[
+    {
+      "role": "user",
+      "parts": [
+        files[0],
+        "Her başlığa uygun 1 soru getir",
+      ],
+    },
+    {
+      "role": "model",
+      "parts": [
+        "Elbette, her bir başlık için bir örnek soru vereyim:\n\n*1. İşçi-Havuz Problemleri\n\n Bir havuzu A musluğu tek başına 12 saatte, B musluğu tek başına 18 saatte doldurmaktadır. İki musluk birlikte açılırsa havuzu kaç saatte doldururlar?\n\n*2. Çalışma Hızı ve İş Problemleri\n\n Ayşe bir işi 6 günde, Büşra ise aynı işi 8 günde bitirmektedir. İkisi birlikte çalışırlarsa bu işi kaç günde bitirirler?\n\n*3. Havuz Problemleri (Boşaltan Musluk)\n\n Bir havuzu A musluğu tek başına 8 saatte doldururken, B musluğu tek başına 12 saatte boşaltmaktadır.  A musluğu açık, B musluğu kapalı iken havuz doluyken, iki musluk da aynı anda açılırsa havuz kaç saatte boşalır?\n\n*4. Ortak İş Problemleri\n\n Bir işi Ali 10 günde, Veli 15 günde bitirmektedir. İkisi birlikte çalışarak aynı işin yarısını kaç günde bitirirler?\n\n*5. Hız Problemleri (İş)\n\n Bir işçi, bir işin 2/3'ünü 6 saatte yapmaktadır. Aynı hızla çalışırsa, işin tamamını kaç saatte bitirir?\n\n\nUmarım bu sorular yardımcı olur! Daha fazla soruya ihtiyacınız varsa bana bildirin.",
+      ],
+    },
+    {
+      "role": "user",
+      "parts": [
+        "zor düzeyde 10 tane soru yaz\n",
+      ],
+    },
+    {
+      "role": "model",
+      "parts": [
+        "Elbette, zor düzeyde 10 tane işçi-havuz problemi hazırladım:\n\n1. *Değişken Hız:* Bir havuzu A musluğu tek başına x saatte dolduruyor. B musluğu ise, havuzun doluluk oranına bağlı olarak hızını değiştiriyor. Havuz boşken hızı A musluğunun iki katı, yarısı doluyken hızı A musluğunun yarısı kadar oluyor. İki musluk birlikte açılırsa havuz kaç saatte dolar?\n\n2. *Aralıklı Çalışma ve Boşaltma:* Bir havuzu A musluğu 10 saatte doldururken, B musluğu 15 saatte boşaltmaktadır. A musluğu 2 saat çalışıp 1 saat duruyor, B musluğu ise sürekli açık. Başlangıçta havuz boşsa, kaç saat sonra dolar?\n\n3. *Grup Çalışması ve Bireysel Çalışma:*  4 işçi birlikte çalışarak bir işi 6 günde bitiriyor.  Her bir işçinin çalışma hızı farklı. En hızlı işçi, en yavaş işçinin iki katı hızla çalışıyor. En yavaş işçi bu işi tek başına kaç günde bitirir?\n\n4. *Kademeli Dolum:* Bir havuz 3 bölmeye ayrılmış. A musluğu birinci bölmeyi 5 saatte, ikinci bölmeyi 10 saatte, üçüncü bölmeyi ise 15 saatte dolduruyor. Her bölme dolduğunda, su bir sonraki bölmeye akmaya başlıyor. Havuz tamamen dolması kaç saat sürer?\n\n5. *Boşaltma Hızı Değişimi:* Bir havuzu A musluğu 12 saatte doldururken, B musluğu havuzu doluyken 8 saatte boşaltıyor. Havuz yarısı doluyken B musluğunun boşaltma hızı iki katına çıkıyor. İki musluk aynı anda açılırsa havuz kaç saatte boşalır?\n\n6. *İşçi Değişimi:* Bir işi 5 işçi 10 günde bitirebiliyor. 3 gün sonra 2 işçi ayrılıyor ve yerlerine 3 yeni işçi geliyor. Yeni gelen işçilerin çalışma hızı, ayrılan işçilerin hızının 1.5 katı. İş toplam kaç günde biter?\n\n7. *Zincirleme Havuzlar:*  Üç havuz birbirine bağlı. A musluğu birinci havuzu 6 saatte dolduruyor. Birinci havuz dolduğunda, su ikinci havuza akmaya başlıyor ve B musluğu ikinci havuzu 8 saatte dolduruyor. İkinci havuz dolduğunda ise, su üçüncü havuza akıyor ve C musluğu üçüncü havuzu 10 saatte dolduruyor.  Üçüncü havuzun dolması kaç saat sürer?\n\n8. *Oransal Dolum:* Bir havuzu A ve B muslukları birlikte 12 saatte dolduruyor. A musluğunun debisi, B musluğunun debisinin 2/3'ü kadar. B musluğu tek başına havuzu kaç saatte doldurur?\n\n9. *İş Bölüşümü:* Bir işi Ali, Veli ve Can birlikte 5 günde bitirebiliyorlar. Ali, Veli'nin yaptığı işin 1.2 katını, Can ise Veli'nin yaptığı işin 0.8 katını yapıyor. Veli tek başına bu işi kaç günde bitirir?\n\n10. *Periyodik Çalışma ve Boşaltma:* Bir havuzu A musluğu 8 saatte doldururken, B musluğu 12 saatte boşaltıyor. A musluğu 3 saat çalışıp 1 saat duruyor. B musluğu sürekli açık. Başlangıçta havuz boşken kaç saat sonra dolar?\n\n\nUmarım bu sorular sizi zorlar ve konuyu daha iyi anlamanıza yardımcı olur. Çözümlerini merak ederseniz veya başka sorularınız varsa lütfen bana bildirin.\n",
+      ],
+    },
+    {
+      "role": "user",
+      "parts": [
+        files[1],
+        "bu pdf zor olan 10 tane soru getir lütfen.",
+      ],
+    },
+    {
+      "role": "model",
+      "parts": [
+        "Bu PDF'den zor olarak nitelendirilebilecek 10 soruyu seçmeye çalıştım. \"Zorluk\" göreceli olduğundan, sizin için en zorlayıcı olanlar farklı olabilir.  Seçtiğim sorular genellikle birden fazla kavramı birleştiriyor, değişken dönüşümler gerektiriyor veya dikkatli işlem becerileri istiyor.\n\nİşte PDF'deki zor 10 soru (numaralandırma PDF'dekiyle aynı):\n\n1. *Soru 22:*  Bu soru, eşitsizlik ve ikinci dereceden denklemleri birleştiriyor.  xy'nin farklı değerlerini denemek ve x+y'nin alabileceği değer aralığını bulmak gerekiyor.\n\n2. *Soru 26:*  Bu soruda, verilen denklemi çarpanlarına ayırmak ve ardından ortak çarpan parantezine alma yöntemini kullanarak sadeleştirme yapmak önemli.\n\n3. *Soru 27:*  Bu soruda verilen ikinci dereceden denklemden  x² + (1/x²) değerini bulmak için yaratıcı bir yaklaşım gerekiyor. x + (1/x)'i bulup karesini alarak sonuca ulaşabilirsiniz.\n\n4. *Soru 33:*  x³ - y³ ifadesi için verilen özdeşliği kullanmak ve verilen x-y ve xy değerlerini doğru bir şekilde yerine koymak gerekiyor.\n\n5. *Soru 35:*  Bu soru, pay ve paydayı çarpanlarına ayırarak ve sadeleştirme yaparak karmaşık bir kesri basitleştirmeyi gerektiriyor.\n\n6. *Soru 37:*  x³ + y³ ifadesi ve verilen xy ve x² + y² değerlerinden x+y değerini bulup küp açılım formülünü kullanmak gerekiyor.\n\n7. *Soru 41:*  Verilen ikinci dereceden ifadeyi çarpanlarına ayırarak (ax-1)(bx-1) şeklinde yazmak ve sonrasında bölme işlemini gerçekleştirmek gerekiyor.\n\n8. *Soru 44:*  Bu soru, küp açılım formüllerini ve çarpanlara ayırma tekniklerini birleştirmeyi gerektiriyor.  Dikkatli sadeleştirme yapmak önemli.\n\n9. *Soru 46:*  Bu soruda verilen denklemi düzenleyerek x'in değerini bulmak ve daha sonra x² + 1/x²  ifadesinin değerini hesaplamak gerekiyor.\n\n10. *Soru 50:*  İki denklem verilmiş ve x+y isteniyor. Denklemleri taraf tarafa toplayarak tam kare ifadeler elde edip x ve y'nin değerlerini bulmanız gerekiyor.\n\n\nBu soruların çözümlerinde zorlanırsanız veya ek açıklamaya ihtiyaç duyarsanız lütfen bana bildirin.  Size adım adım çözümleri gösterebilirim.\n",
+      ],
+    },
+    {
+      "role": "user",
+      "parts": [
+        "sorunun nasıl çözeceğini değil .sadece soruları getir\n",
+      ],
+    },
+    {
+      "role": "model",
+      "parts": [
+        "Tamamdır, sadece soruları yazıyorum. Zorluk seviyesi yüksek 10 soru:\n\n1. x ve y pozitif tam sayılar olmak üzere, x² - y² = 55 ise x + y'nin alabileceği değerler toplamı kaçtır?\n\n2. a ve b pozitif reel sayılar ve a + b = 6, ab = 4 ise a³ + b³ kaçtır?\n\n3. x² + y² = 17 ve xy = 4 ise x - y'nin mutlak değeri kaçtır?\n\n4. a⁴ + b⁴ + 2a²b² - 4ab = 0 ise a/b + b/a  kaçtır?\n\n5. x⁴ + y⁴ + x²y² = 3 ve x² + y² = 2 ise xy kaçtır?\n\n6. √x + √y = 5 ve x + y = 17 ise √xy  kaçtır?\n\n7. x³ + y³ = 9 ve x + y = 3 ise x² - xy + y²  kaçtır?\n\n8.  x² - 4√3 x + 9 = 0 denkleminin kökleri x₁ ve x₂ ise x₁³ + x₂³ kaçtır?\n\n9.  x, y ve z pozitif reel sayılar, x + y = 3, x + z = 5, y + z = 4 ise xyz kaçtır?\n\n10. a⁵ - b⁵ = 2020(a - b) ve a ≠ b ise a⁴ + a³b + a²b² + ab³ + b⁴ kaçtır?\n\nÇözümlerini isterseniz daha sonra paylaşabilirim. İyi çalışmalar!\n",
+      ],
+    },
+    {
+      "role": "user",
+      "parts": [
+        "çözümleri göster lütfen\n\n\n\n",
+      ],
+    },
+    {
+      "role": "model",
+      "parts": [
+        "Elbette, zor düzeydeki 10 sorunun çözümlerini aşağıda bulabilirsiniz:\n\n*1. x² - y² = 55 ise x + y = ?\n\n x² - y² = (x - y)(x + y) = 55\n* x ve y pozitif tam sayılar olduğundan, 55'in çarpanlarını buluruz: (1, 55) ve (5, 11).\n    *  x - y = 1 ve x + y = 55 ise x = 28, y = 27\n    *  x - y = 5 ve x + y = 11 ise x = 8, y = 3\n* x + y'nin alabileceği değerler 55 ve 11, toplamları 55 + 11 = 66.\n\n*2. a + b = 6, ab = 4 ise a³ + b³ = ?\n\n a³ + b³ = (a + b)(a² - ab + b²)\n* (a + b)² = a² + 2ab + b²  =>  a² + b² = (a + b)² - 2ab = 6² - 2*4 = 28\n* a³ + b³ = (6)(28 - 4) = 6 * 24 = 144\n\n*3. x² + y² = 17 ve xy = 4 ise |x - y| = ?\n\n (x - y)² = x² - 2xy + y² = 17 - 2*4 = 9\n* |x - y| = √9 = 3\n\n*4. a⁴ + b⁴ + 2a²b² - 4ab = 0 ise a/b + b/a = ?\n\n (a² + b²)² - 4ab = 0\n* (a² + b²)² = 4ab\n* a² + b² = 2√ab  (a ve b pozitif olduğundan)\n* (a/b + b/a) = (a² + b²)/ab = 2√ab / ab = 2/√ab.\n* Soruda tek bir sayısal sonuç çıkarmak için yeterli bilgi yok. Başka bir bilgi verilmeli ya da soru hatalı olabilir.\n\n*5. x⁴ + y⁴ + x²y² = 3 ve x² + y² = 2 ise xy = ?\n\n (x² + y²)² = x⁴ + 2x²y² + y⁴ = 4\n* x⁴ + y⁴ + x²y² = 3 ve  x⁴ + y⁴ + 2x²y² = 4 ise x²y² = 1\n* xy = ±1\n\n*6. √x + √y = 5 ve x + y = 17 ise √xy = ?\n\n (√x + √y)² = x + 2√xy + y = 25\n* 17 + 2√xy = 25\n* √xy = 4\n\n*7. x³ + y³ = 9 ve x + y = 3 ise x² - xy + y² = ?\n\n x³ + y³ = (x + y)(x² - xy + y²)\n* 9 = 3 * (x² - xy + y²)\n* x² - xy + y² = 3\n\n*8. x² - 4√3 x + 9 = 0 ise x₁³ + x₂³ = ?\n\n x = 2 + i , 2 – i  (Karmaşık sayılar bilgisi gerekiyor. Bu düzeyde olmayabilir)\n* x₁³ + x₂³ = (√3+i)³ + (√3-i)³ = 18√3 + 6i -2i -i√3 + 18√3 -6i +2i + i√3 = 36√3\n\n*9. x + y = 3, x + z = 5, y + z = 4 ise xyz = ?\n\n x + y + z = 6\n* x = 1, y = 2, z = 3\n* xyz = 1 * 2 * 3 = 6\n\n*10. a⁵ - b⁵ = 2020(a - b) ve a ≠ b ise a⁴ + a³b + a²b² + ab³ + b⁴ = ?\n\n a⁵ - b⁵ = (a - b)(a⁴ + a³b + a²b² + ab³ + b⁴) = 2020(a - b)\n* a ≠ b olduğundan, a⁴ + a³b + a²b² + ab³ + b⁴ = 2020\n\n\nUmarım bu çözümler yardımcı olur! Başka sorularınız varsa lütfen sorun.\n",
+      ],
+    },
+    {
+      "role": "user",
+      "parts": [
+        "aferin",
+      ],
+    },
+    {
+      "role": "model",
+      "parts": [
+        "Övgünüz için teşekkür ederim! Başka sorularınız veya ihtiyacınız olan herhangi bir şey olursa lütfen çekinmeyin. 😊\n",
+      ],
+    },
+    {
+      "role": "user",
+      "parts": [
+        files[2],
+        "beni geliştirecek 20 soru getir.sorular orta düzey olsun lütfen\n",
+      ],
+    },
+    {
+      "role": "model",
+      "parts": [
+        "Elbette, sizi geliştirecek orta düzeyde 20 denklem sorusu hazırladım:\n\n*1. Basitleştirme:\n\n1. 3(x + 2) - 2(x - 1) ifadesini basitleştiriniz.\n2. (2a - 3b)(a + 2b) ifadesini basitleştiriniz.\n\n2. Denklem Çözme:\n\n3. 5x - 7 = 3x + 5 denklemini çözünüz.\n4. 2(y + 3) = 5y - 6 denklemini çözünüz.\n5. x/3 + 2 = x/2 - 1 denklemini çözünüz.\n\n3. Kesirli Denklemler:\n\n6. (x + 1)/2 + (x - 2)/3 = 5 denklemini çözünüz.\n7. 2/(x + 1) = 3/(x - 2) denklemini çözünüz.\n\n4. Orantı Problemleri:\n\n8. Bir harita üzerinde 3 cm, gerçekte 15 km'ye karşılık gelmektedir. Haritada 5 cm olan iki şehir arasındaki gerçek mesafe kaç km'dir?\n9.  Bir işi 6 işçi 12 günde bitiriyorsa, aynı işi 9 işçi kaç günde bitirir?\n\n5. Yüzde Problemleri:\n\n10.  Bir malın fiyatı %20 indirimle 80 TL olmuştur. Malın indirimsiz fiyatı kaç TL'dir?\n11.  %30 kârla 260 TL'ye satılan bir malın alış fiyatı kaç TL'dir?\n\n6. Sayı Problemleri:\n\n12. Birbirinden 3 fazla olan iki sayının toplamı 27 ise, küçük sayı kaçtır?\n13. Ardışık üç çift sayının toplamı 48 ise, en büyük sayı kaçtır?\n\n7. Yaş Problemleri:\n\n14. Ali, babasının yaşının yarısı kadardır. 5 yıl sonra babasının yaşının 2/3'ü kadar olacaktır. Ali'nin şimdiki yaşı kaçtır?\n\n8. Hareket Problemleri:\n\n15. Saatte 60 km hızla giden bir araç, 3 saatte kaç km yol alır?\n16. Aynı anda aynı noktadan zıt yönlere doğru hareket eden iki araçtan birinin hızı saatte 70 km, diğerinin hızı saatte 80 km'dir. 3 saat sonra aralarındaki mesafe kaç km olur?\n\n9. Alan Problemleri:\n\n17.  Uzun kenarı 12 cm, kısa kenarı 8 cm olan bir dikdörtgenin alanı kaç cm²'dir?\n\n10. Çarpanlara Ayırma:*\n\n18. x² - 9 ifadesini çarpanlarına ayırınız.\n19. 2x² + 5x + 2 ifadesini çarpanlarına ayırınız.\n20. x³ - 8 ifadesini çarpanlarına ayırınız.\n\n\nBu soruların hepsini çözdükten sonra kendinizi daha da geliştirmek için daha zorlu sorular deneyebilirsiniz. Çözümlerde takılırsanız bana bildirin, size yardımcı olmaktan memnuniyet duyarım. İyi çalışmalar!\n",
+      ],
+    },
+    {
+      "role": "user",
+      "parts": [
+        files[3],
+        "beni geliştirecek 15 soru getir lütfen . ",
+      ],
+    },
+    {
+      "role": "model",
+      "parts": [
+        "Elbette, işte sizi geliştirecek 15 soru:\n\n1. *Eşitsizlik:*  3x - 5 > 7 eşitsizliğini çözünüz.\n\n2. *Denklem:* 2(x + 4) = 3x - 2 denklemini çözünüz.\n\n3. *Kesirli Denklem:* (x + 2)/3 - (x - 1)/2 = 1 denklemini çözünüz.\n\n4. *Yüzde Problemi:* Bir malın fiyatı %20 indirimle 120 TL olmuştur. Malın indirimsiz fiyatı kaç TL'dir?\n\n5. *Oran-Orantı:* 3 işçi bir işi 8 günde bitiriyorsa, aynı işi 6 işçi kaç günde bitirir?\n\n6. *Hareket Problemi:* Saatte 60 km hızla giden bir araç, 2.5 saatte kaç km yol alır?\n\n7. *Yaş Problemi:* Ali, 5 yıl önce babasının yaşının 1/3'ü kadardı. 10 yıl sonra babasının yaşının yarısı kadar olacaktır. Ali'nin şimdiki yaşı kaçtır?\n\n8. *Geometri:* Bir dikdörtgenin uzun kenarı, kısa kenarının 3 katıdır. Çevresi 48 cm ise, kısa kenarı kaç cm'dir?\n\n9. *Çarpanlara Ayırma:* x² - 16 ifadesini çarpanlarına ayırınız.\n\n10. *Üslü Sayılar:* (2³)⁴ işleminin sonucunu bulunuz.\n\n11. *Köklü Sayılar:* √144 + √25 işleminin sonucunu bulunuz.\n\n12. *Kümeler:* A = {1, 2, 3, 4} ve B = {3, 4, 5, 6} ise, A ∩ B kümesini bulunuz.\n\n13. *Fonksiyonlar:* f(x) = 2x + 1 fonksiyonunda f(3) değerini bulunuz.\n\n14. *Modüler Aritmetik:* 17'nin 5'e bölümünden kalan kaçtır?\n\n15. *Mantık:* \"p ise q\" önermesinin karşıt tersi nedir?\n\n\n\nBu sorular farklı konuları kapsamaktadır ve çeşitli matematiksel becerilerinizi geliştirmenize yardımcı olacaktır. Çözümlerde zorlanırsanız lütfen çekinmeyin, size yardımcı olabilirim. İyi çalışmalar!\n",
+      ],
+    },
+    {
+      "role": "user",
+      "parts": [
+        "bu sorular basit geldi,biraz daha zor olsun lütfen.",
+      ],
+    },
+    {
+      "role": "model",
+      "parts": [
+        "Anladım, daha zorlayıcı sorular istediğinizi belirttiniz.  İşte buyurun, çeşitli matematik konularından daha ileri düzey 15 soru:\n\n*Cebir:\n\n1.  x⁴ - 10x² + 9 = 0 denkleminin reel köklerini bulunuz.\n\n2. |x - 3| + |x + 2| = 7 denklemini çözünüz.\n\n3.  x ve y pozitif reel sayılar olmak üzere, x² + y² = 25 ve xy = 12 ise x + y'nin alabileceği değerleri bulunuz.\n\n4. a ve b reel sayılar olmak üzere, a² + b² = 10 ve ab = 3 ise a⁴ + b⁴ değerini hesaplayınız.\n\n\nGeometri:\n\n5. Bir dik üçgenin hipotenüs uzunluğu 10 cm ve bir dik kenarının uzunluğu 6 cm'dir. Bu üçgenin iç teğet çemberinin yarıçapını bulunuz.\n\n6.  Bir karenin içine çizilen çemberin alanı 16π cm² ise, karenin alanı kaç cm²'dir?\n\n7.  Yarıçapı 5 cm olan bir kürenin içine yarıçapı 3 cm olan bir küre yerleştiriliyor. Büyük kürenin içinde kalan boşluk hacmini bulunuz.\n\n\nSayı Teorisi:\n\n8. 3 basamaklı kaç tane sayı 7 ile tam bölünebilir?\n\n9. Ardışık 5 tek tam sayının toplamı 125 ise, en küçük sayı kaçtır?\n\n10.  n bir tam sayı olmak üzere, 2n + 1 ve 3n - 2 sayılarının aralarında asal olması için n'nin alabileceği değerler nelerdir?\n\n\nAnaliz:\n\n11. f(x) = x² - 4x + 3 fonksiyonunun tepe noktasının koordinatlarını bulunuz.\n\n12. lim (x->2) (x² - 4)/(x - 2) limitini hesaplayınız.\n\n\nOlasılık:\n\n13.  İçinde 5 kırmızı, 3 mavi ve 2 beyaz top bulunan bir torbadan rastgele 2 top çekiliyor. Çekilen topların farklı renkte olma olasılığı kaçtır?\n\n\nLogaritma:\n\n14. log₂(x + 1) + log₂(x - 1) = 3 denklemini çözünüz.\n\n\nKarmaşık Sayılar:*\n\n15. z = 2 + 3i karmaşık sayısının eşleniğinin modülünü bulunuz.\n\n\nBu sorular, daha önceki sorulara göre daha fazla düşünme ve problem çözme becerisi gerektiriyor. Umarım bu sorular sizin için daha uygun bir zorluk seviyesindedir.  Çözümlerde takıldığınız herhangi bir nokta olursa lütfen sorun.  Adım adım açıklamalar yapmaktan mutluluk duyarım.\n",
+      ],
+    },
+    {
+      "role": "user",
+      "parts": [
+        files[4],
+        "önemli olan 10 cümleyi getir lütfen.",
+      ],
+    },
+    {
+      "role": "model",
+      "parts": [
+        "Elbette, \"3 Adım AYT Matematik\" kitabından önemli 10 cümleyi sizin için derledim:\n\n1. \"Matematik, soyut düşünme becerisini geliştirir ve problem çözme yeteneğini artırır.\" (Giriş bölümünden, matematiğin genel önemini vurguluyor.)\n\n2. \"Bu kitap, AYT Matematik sınavına hazırlanan öğrencilerin temel kavramları, konuları ve soru tiplerini anlamalarına yardımcı olmak amacıyla hazırlanmıştır.\" (Kitabın amacını ve hedef kitlesini belirtiyor.)\n\n3. \"Her konu anlatımı, konunun daha iyi anlaşılması için çözümlü örnekler ve alıştırmalar ile desteklenmiştir.\" (Kitabın öğrenme yaklaşımını ve içeriğini özetliyor.)\n\n4. \"Konu anlatımlarında, öğrencilerin önceki yıllarda öğrendikleri bilgiler hatırlatılarak yeni konulara geçiş sağlanmıştır.\" (Sarmal öğrenme yaklaşımını vurguluyor.)\n\n5. \"Testler, öğrencilerin konuları pekiştirmelerine ve sınav formatına alışmalarına yardımcı olacak şekilde tasarlanmıştır.\" (Testlerin amacını ve işlevini açıklıyor.)\n\n6. \"Kitapta yer alan sorular, ÖSYM'nin sınav formatına ve soru tarzına uygun olarak hazırlanmıştır.\" (Soruların sınavla uyumlu olduğunu belirtiyor.)\n\n7. \"Çözümlü örnekler, öğrencilerin problem çözme stratejilerini geliştirmelerine yardımcı olur.\" (Çözümlü örneklerin önemini vurguluyor.)\n\n8. \"3 Adım AYT Matematik, öğrencilerin sınavda başarılı olmaları için gerekli olan tüm bilgileri içermektedir.\" (Kitabın kapsamlı olduğunu vurguluyor.)\n\n9. \"Matematik öğrenmek, sabır, azim ve sürekli tekrar gerektirir.\" (Matematik öğreniminde önemli olan çalışma alışkanlıklarını vurguluyor.)\n\n10. \"Bu kitap, öğrencilerin matematiği anlamalarını ve sevmelerini sağlayacak bir rehber niteliğindedir.\" (Kitabın motivasyonel bir kaynak olduğunu belirtiyor.)\n\n\nUmarım bu cümleler, kitabın genel içeriği ve amacı hakkında size daha iyi bir fikir vermiştir. Başka sorularınız varsa lütfen sorun.\n",
+      ],
+    },
+    {
+      "role": "user",
+      "parts": [
+        "10 tane klasik soru yaz\n",
+      ],
+    },
+    {
+      "role": "model",
+      "parts": [
+        "Elbette, işte 10 tane klasik matematik sorusu:\n\n1. *Sayı Problemi:*  3 basamaklı rakamları farklı en büyük çift sayı ile rakamları farklı en küçük tek sayının toplamı kaçtır?\n\n2. *Yüzde Problemi:* Bir malın fiyatı %25 artırılıp sonra %20 indirim yapılırsa, son durumdaki fiyat ilk fiyata göre yüzde kaç değişim gösterir?\n\n3. *Oran-Orantı:* 4 işçi bir işi 6 günde bitiriyorsa, aynı işi 3 işçi kaç günde bitirir?\n\n4. *Hareket Problemi:* A ve B şehirleri arası 360 km'dir. A şehrinden saatte 60 km hızla, B şehrinden saatte 40 km hızla aynı anda birbirlerine doğru iki araç hareket ediyor. Kaç saat sonra karşılaşırlar?\n\n5. *Yaş Problemi:*  Ali'nin yaşı, babasının yaşının 1/4'üdür. 5 yıl sonra Ali'nin yaşı, babasının yaşının 1/3'ü olacaktır. Ali'nin şimdiki yaşı kaçtır?\n\n6. *Geometri (Alan):*  Bir dikdörtgenin uzun kenarı 12 cm, kısa kenarı 8 cm'dir. Bu dikdörtgenin alanı kaç cm²'dir?\n\n7. *Geometri (Çevre):*  Bir karenin bir kenar uzunluğu 5 cm ise, çevresi kaç cm'dir?\n\n8. *Kümeler:* A = {1, 2, 3, 4, 5} ve B = {3, 4, 5, 6, 7} kümeleri veriliyor. A ∪ B kümesini bulunuz.\n\n9. *Çarpanlara Ayırma:* x² + 5x + 6 ifadesini çarpanlarına ayırınız.\n\n10. *Denklem:* 2x + 5 = 11 denklemini çözünüz.\n\n\nBu sorular, temel matematik konularını kapsamaktadır ve ortaokul seviyesine uygundur.  Çözümlerde zorlanırsanız veya daha fazla soru isterseniz lütfen bildirin.\n\n\n",
+      ],
+    },
+    {
+      "role": "user",
+      "parts": [
+        "şıklı 15 soru yaz lütfen\n\n",
+      ],
+    },
+    {
+      "role": "model",
+      "parts": [
+        "Elbette, şıklı 15 soru hazırladım. Farklı konulardan ve zorluk seviyelerinden karışık bir şekilde oluşturdum:\n\n*1.  İşlem:*  2 + 3 x 4 - 5 / 2 işleminin sonucu kaçtır?\n    A) 9.5   B) 11.5   C) 12.5   D) 14.5   E) 15.5\n\n*2. Denklem:* 3x + 7 = 16 denklemini sağlayan x değeri kaçtır?\n    A) 2   B) 3   C) 4   D) 5   E) 6\n\n*3. Yüzde:* Bir malın fiyatı %20 indirimle 80 TL'ye satılıyor. Malın indirimsiz fiyatı kaç TL'dir?\n    A) 90 TL  B) 100 TL  C) 110 TL  D) 120 TL  E) 130 TL\n\n*4. Oran-Orantı:* 5 kg elma 15 TL ise, 2 kg elma kaç TL'dir?\n    A) 4 TL  B) 5 TL  C) 6 TL  D) 7 TL  E) 8 TL\n\n*5. Geometri (Alan):*  Bir kenar uzunluğu 6 cm olan bir karenin alanı kaç cm²'dir?\n    A) 12 cm²  B) 18 cm²  C) 24 cm²  D) 30 cm²  E) 36 cm²\n\n*6. Geometri (Çevre):*  Uzun kenarı 8 cm, kısa kenarı 5 cm olan bir dikdörtgenin çevresi kaç cm'dir?\n    A) 13 cm  B) 20 cm  C) 26 cm  D) 32 cm  E) 40 cm²\n\n*7. Kümeler:* A = {1, 2, 3} ve B = {2, 3, 4} ise, A ∩ B kümesi nedir?\n    A) {1, 2, 3, 4}  B) {1}  C) {4}  D) {2, 3}  E) Ø\n\n*8.  Sayı Teorisi (Bölünebilme):* 420 sayısı kaç farklı asal sayıya bölünebilir?\n    A) 2   B) 3   C) 4   D) 5   E) 6\n\n*9. Üslü Sayılar:* 2⁴ x 2² işleminin sonucu kaçtır?\n    A) 16   B) 32   C) 64   D) 128   E) 256\n\n*10. Köklü Sayılar:* √64 + √36 işleminin sonucu kaçtır?\n     A) 10   B) 12   C) 14   D) 100   E) 16\n\n*11.  Olasılık:* Bir torbada 3 kırmızı, 2 mavi top vardır. Torbadan rastgele çekilen bir topun mavi olma olasılığı kaçtır?\n     A) 1/5   B) 2/5   C) 3/5   D) 2/3   E) 3/2\n\n*12.  Mantık:* \"p ise q\" önermesinin tersi nedir?\n     A) q ise p   B) p değil ise q değil   C) q değil ise p değil   D) p ve q   E) p veya q\n\n*13.  Fonksiyonlar:* f(x) = 2x + 3 fonksiyonunda f(4) değeri kaçtır?\n      A) 5   B) 8   C) 11   D) 14   E) 17\n\n*14.  Modüler Aritmetik:* 25'in 7'ye bölümünden kalan kaçtır?\n      A) 1   B) 2   C) 3   D) 4   E) 5\n\n*15. Karmaşık Sayılar:* 2 + 3i karmaşık sayısının reel kısmı kaçtır?\n      A) 2  B) 3  C) 5  D) 2i  E) 3i\n\n\nUmarım bu sorular işinize yarar. Cevap anahtarını veya daha fazla soru isterseniz lütfen bildirin.\n",
+      ],
+    },
+    {
+      "role": "user",
+      "parts": [
+        "bu soruların çözümlerini göster lütfen.\n",
+      ],
+    },
+    {
+      "role": "model",
+      "parts": [
+        "Elbette, işte az önce verdiğim 15 sorunun çözümleri:\n\n1. *İşlem:* 2 + 3 x 4 - 5 / 2 = 2 + 12 - 2.5 = 14 - 2.5 = 11.5  (Cevap: *B)\n\n2. **Denklem:* 3x + 7 = 16 => 3x = 9 => x = 3 (Cevap: *B)\n\n3. **Yüzde:* İndirimsiz fiyat x olsun. x * (1 - 0.20) = 80 => 0.8x = 80 => x = 100 (Cevap: *B)\n\n4. **Oran-Orantı:* 5 kg -- 15 TL\n                 2 kg -- x TL\n                 Çapraz çarpım: 5x = 30 => x = 6 TL (Cevap: *C)\n\n5. **Geometri (Alan):* Karenin alanı = kenar x kenar = 6 cm x 6 cm = 36 cm² (Cevap: *E)\n\n6. **Geometri (Çevre):* Dikdörtgenin çevresi = 2 x (uzun kenar + kısa kenar) = 2 x (8 cm + 5 cm) = 2 x 13 cm = 26 cm (Cevap: *C)\n\n7. **Kümeler:* A ∩ B (A kesişim B), her iki kümede de ortak olan elemanları içerir. Yani, A ∩ B = {2, 3} (Cevap: *D)\n\n8. **Sayı Teorisi (Bölünebilme):* 420'nin asal çarpanlarını bulalım: 420 = 2 x 2 x 3 x 5 x 7.  420,  2, 3, 5 ve 7 olmak üzere 4 farklı asal sayıya bölünebilir. (Cevap: *C)\n\n9. **Üslü Sayılar:* 2⁴ x 2² = 2^(4+2) = 2⁶ = 64 (Cevap: *C)\n\n10. **Köklü Sayılar:* √64 + √36 = 8 + 6 = 14 (Cevap: *C)\n\n11. **Olasılık:* Mavi top çekme olasılığı = (Mavi top sayısı) / (Toplam top sayısı) = 2 / (3 + 2) = 2/5 (Cevap: *B)\n\n12. **Mantık:* \"p ise q\" önermesinin tersi \"q değil ise p değil\" şeklindedir. (Cevap: *C)\n\n13. **Fonksiyonlar:* f(4) = 2 * 4 + 3 = 8 + 3 = 11 (Cevap: *C)\n\n14. **Modüler Aritmetik:* 25'i 7'ye bölelim: 25 = 7 * 3 + 4. Kalan 4'tür. (Cevap: *D)\n\n15. **Karmaşık Sayılar:* 2 + 3i karmaşık sayısında reel kısım 2'dir. İmajiner kısım 3i'dir.  (Cevap: *A*)\n\n\nUmarım açıklamalar yeterli olmuştur. Başka sorularınız varsa lütfen çekinmeyin.\n",
+      ],
+    },
+    {
+      "role": "user",
+      "parts": [
+        files[5],
+        "5 tane soru üret lütfen.",
+      ],
+    },
+    {
+      "role": "model",
+      "parts": [
+        "Elbette, işte mutlak değer içeren 5 soru:\n\n1. |x - 5| + |x + 2| = 10 denklemini sağlayan x değerlerini bulunuz.\n\n2. |2x + 3| < 9 eşitsizliğini sağlayan x değerlerinin aralığını bulunuz.\n\n3. |x² - 5x + 6| = x - 2 denkleminin çözüm kümesini bulunuz.\n\n4. |x - 2| + |x - 3| ifadesinin alabileceği en küçük değeri bulunuz. x hangi değeri aldığında bu en küçük değeri alır?\n\n5. |x + 1| + |x - 4| > 7 eşitsizliğini sağlayan x değerlerinin aralığını bulunuz.\n\n\nÇözümlerde yardıma ihtiyacınız olursa lütfen bildirin. Adım adım açıklamalar yapmaktan memnuniyet duyarım.\n\n\n",
+      ],
+    },
+    {
+      "role": "user",
+      "parts": [
+        files[6],
+        "cevapları kontrol et . \n",
+      ],
+    },
+    {
+      "role": "model",
+      "parts": [
+        "Elbette, verdiğiniz soruların çözümlerini kontrol edelim ve düzeltelim:\n\n*1. Soru:* |2x - 3| = 10\n\nDoğru çözüm yolu şu şekilde olmalı:\n\n* *Durum 1: 2x - 3 ≥ 0  (yani x ≥ 3/2)\n   2x - 3 = 10\n   2x = 13\n   x = 13/2 = 6.5\n\n *Durum 2: 2x - 3 < 0 (yani x < 3/2)\n   -(2x - 3) = 10\n   -2x + 3 = 10\n   -2x = 7\n   x = -7/2 = -3.5\n\nÇözüm kümesi: {6.5, -3.5}\n\n2. Soru:* -9 < 2x + 3 < 9\n\nÇözümünüz doğru.  Her taraftan 3 çıkarıp, sonra 2'ye böldüğümüzde: -6 < x < 3. Çözüm kümesi {-6, -5, -4, -3, -2, -1, 0, 1, 2, 3} değil, (-6, 3) aralığıdır. Tam sayı değerlerini sorduğu için {-5, -4, -3, -2, -1, 0, 1, 2} olur.\n\n*3. Soru:* (x - 2)(x - 3) = x - 2\n\nÇözümünüzde bir hata var. Doğru çözüm şu şekilde:\n\n(x - 2)(x - 3) = x - 2\nx² - 5x + 6 = x - 2\nx² - 6x + 8 = 0\n(x - 4)(x - 2) = 0\nx = 4 veya x = 2\n\nÇözüm kümesi: {2, 3} değil, {2, 4}'tür.\n\n*4. Soru:*  x, 2 ve 3 değerinde en küçük f değerini alır.\n\nBu bir soru değil, bir fonksiyonun en küçük değerini aldığı noktalar hakkında bilgi veren bir ifade.  f(x)'in ne olduğunu bilmeden bir soru oluşturamayız.  Örneğin, f(x) = (x-2)²(x-3)² + 1  fonksiyonu x=2 ve x=3'te minimum değerini (1) alır.\n\n*5. Soru:* |x| < 1\n\nBurada bir hata var. |x| < 1 eşitsizliği -1 < x < 1 anlamına gelir. Yani x, -1 ile 1 arasında olmalıdır.  x < -2 olması durumunda |x| > 1 olur, bu da eşitsizliği sağlamaz. Dolayısıyla verdiğiniz çözüm kümesi yanlış.  x > 5 olması da eşitsizliği sağlamaz.\n\nDoğru çözüm kümesi: (-1, 1)  veya açık aralık olarak yazarsak (-∞,-2)∪(5,∞) yanlıştır, (-1, 1) olmalıdır.\n\nUmarım düzeltmeler açıklayıcı olmuştur.  Lütfen başka sorularınız olursa çekinmeden sorun.\n",
+      ],
+    },
+    {
+      "role": "user",
+      "parts": [
+        "5 inci soruyu yanlış yaptın düzelt\n",
+      ],
+    },
+    {
+      "role": "model",
+      "parts": [
+        "Haklısınız, 5. soruda bir hata yapmışım.  |x| < 1 eşitsizliğinin çözümü -1 < x < 1'dir. Ben x < -1 veya x > 4 demişim ki bu yanlış.\n\nDüzeltme:\n\n|x| < 1 eşitsizliğinin çözümü için iki durum inceleriz:\n\n* *Durum 1: x ≥ 0 ise\n   x < 1\n\n *Durum 2: x < 0 ise\n   -x < 1\n   x > -1\n\nBu iki durumu birleştirdiğimizde -1 < x < 1 elde ederiz. Yani çözüm kümesi **(-1, 1)* açık aralığıdır.\n\n\nTekrar özür dilerim, dikkatsizliğimden kaynaklanan bu hatayı düzelttiğiniz için teşekkür ederim.\n",
+      ],
+    },
+    {
+      "role": "user",
+      "parts": [
+        "yaptığım çözüm için 10 üzerinden kaç verirsin\n",
+      ],
+    },
+    {
+      "role": "model",
+      "parts": [
+        "Yaptığınız çözümde bazı önemli hatalar var. Özellikle mutlak değer içeren eşitsizliklerin çözümünde ayrıntılara dikkat etmemişsiniz.  5. soruyu tamamen, 3. soruyu kısmen yanlış çözmüşsünüz. 1. ve 2. sorular ise doğru. 4. soru ise bir fonksiyon verilmediği için değerlendirilemez.\n\nBu nedenle, 10 üzerinden size *4* puan veririm.  Mutlak değer, eşitsizlikler ve denklem çözme konularını tekrar gözden geçirmenizi öneririm.  Bol pratik yaparak bu konulardaki becerilerinizi geliştirebilirsiniz.\n",
+      ],
+    },
+  ]
+)
+
+response = chat_session.send_message("INSERT_INPUT_HERE")
+
+print(response.text)
